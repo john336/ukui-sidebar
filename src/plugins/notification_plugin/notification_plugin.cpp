@@ -18,26 +18,24 @@
 
 #include "notification_plugin.h"
 #include "scrollareawidget.h"
+#include "takeinboxtoolbutton.h"
 #include <QSvgRenderer>
 
 
 
 NotificationPlugin::NotificationPlugin()
 {
+    m_bShowTakeIn = false;
+    m_pMainWidget = new QWidget;
+//    m_pMainWidget->setObjectName("NotificationCenter");
+
     /* 加载样式表 */
     QFile file(":/qss/notification_plugin.css");
     if (file.open(QFile::ReadOnly)) {
         m_strQss = QLatin1String(file.readAll());
         file.close();
+        m_pMainWidget->setStyleSheet(m_strQss);
     }
-
-    m_bShowTakeIn = false;
-
-    m_pMainWidget = new QWidget;
-//    m_pMainWidget->setObjectName("NotificationCenter");
-    QString strPaletteColor = m_strQss.mid(20, 7);
-    m_pMainWidget->setPalette(QPalette(QColor(strPaletteColor)));
-    m_pMainWidget->setStyleSheet(m_strQss);
 
     //插件的总VBoxLayout布局器
     QVBoxLayout* pNotificationVBoxLayout = new QVBoxLayout;
@@ -56,23 +54,28 @@ NotificationPlugin::NotificationPlugin()
     pLabel->setObjectName("notificationcentername");
 
     //收纳按钮
-    QToolButton* pQToolButton = new QToolButton();
-    pQToolButton->setObjectName("takein");
-    connect(pQToolButton, SIGNAL(clicked()), this, SLOT(showTakeInMessage()));
+    m_pTakeInBoxToolButton = new TakeInBoxToolButton();
+    m_pTakeInBoxToolButton->setObjectName("takein");
+    connect(m_pTakeInBoxToolButton, SIGNAL(clicked()), this, SLOT(showTakeInMessage()));
+
     //QToolButton添加svg图片
-    QSvgRenderer* pSvgRender = new QSvgRenderer;
-    QString strSvg = ":/images/box.svg";
-    pSvgRender->load(strSvg);
-    QPixmap* pPixmap = new QPixmap(22, 24);
-    pPixmap->fill(Qt::transparent);
-    QPainter painter(pPixmap);
-    pSvgRender->render(&painter);
-    pQToolButton->setIcon(QIcon(*pPixmap));
+    m_pSvgRender = new QSvgRenderer;
+    m_pSvgRender->load(QString(":/images/box.svg"));
+    m_pPixmap = new QPixmap(24, 24);
+    m_pPixmap->fill(Qt::transparent);
+    QPainter painter(m_pPixmap);
+    m_pSvgRender->render(&painter);
+    m_pTakeInBoxToolButton->setIcon(QIcon(*m_pPixmap));
 
     pQHBoxLayout1->addWidget(pLabel, 0, Qt::AlignLeft);
-    pQHBoxLayout1->addWidget(pQToolButton, 0, Qt::AlignRight);
+    pQHBoxLayout1->addWidget(m_pTakeInBoxToolButton, 0, Qt::AlignRight);
     pWidget1->setLayout(pQHBoxLayout1);
     pNotificationVBoxLayout->addWidget(pWidget1);
+
+    m_pTakeInCoutLabel = new QLabel(m_pMainWidget);
+    m_pTakeInCoutLabel->setObjectName("takeincout");
+    m_pTakeInCoutLabel->setAlignment(Qt::AlignHCenter | Qt::AlignVCenter);
+    m_pTakeInCoutLabel->setVisible(false);
 
     QSpacerItem* pVFixedSpacer = new QSpacerItem(10, 24, QSizePolicy::Fixed, QSizePolicy::Fixed);
     pNotificationVBoxLayout->addSpacerItem(pVFixedSpacer);
@@ -84,11 +87,11 @@ NotificationPlugin::NotificationPlugin()
     //第二行左侧标签“重要的信息”，右侧一个清空按钮，一个设置按钮
     QHBoxLayout* pQHBoxLayout2 = new QHBoxLayout;
     pQHBoxLayout2->setContentsMargins(12,0,10,10);
-    pLabel = new QLabel("重要的信息");
-    pLabel->resize(70, 14);
+    m_pNotificationLabel = new QLabel("重要的通知");
+    m_pNotificationLabel->resize(70, 14);
     QFont font1;
     font1.setPixelSize(14);
-    pLabel->setFont(font1);
+    m_pNotificationLabel->setFont(font1);
 
     QSpacerItem* pHSpacer = new QSpacerItem(300, 10, QSizePolicy::Expanding, QSizePolicy::Fixed);
 
@@ -105,7 +108,7 @@ NotificationPlugin::NotificationPlugin()
     pSettingToolButton->setText("设置");
 
 
-    pQHBoxLayout2->addWidget(pLabel, 0, Qt::AlignLeft);
+    pQHBoxLayout2->addWidget(m_pNotificationLabel, 0, Qt::AlignLeft);
     pQHBoxLayout2->addSpacerItem(pHSpacer);
     pQHBoxLayout2->addWidget(pClearAllToolButton, 0, Qt::AlignRight);
     pQHBoxLayout2->addSpacerItem(pFixSpacer);
@@ -192,7 +195,6 @@ void NotificationPlugin::onTakeinMsg(SingleMsg* pSingleMsg)
 
     m_listSingleMsg.removeAt(nIndex);
     m_pScrollAreaNotifyVBoxLayout->removeWidget(pSingleMsg);
-//    pSingleMsg->deleteLater();
 
     if(0 == m_listSingleMsg.count() && 1 == m_pScrollAreaNotifyVBoxLayout->count())
     {
@@ -201,48 +203,63 @@ void NotificationPlugin::onTakeinMsg(SingleMsg* pSingleMsg)
         m_pScrollAreaNotifyVBoxLayout->insertWidget((m_pScrollAreaNotifyVBoxLayout->count() - 1), m_pMessageCenterLabel);
     }
 
-    m_listSingleTakeInMsg.append(pSingleMsg);
-    m_pScrollAreaTakeInVBoxLayout->insertWidget((m_pScrollAreaTakeInVBoxLayout->count() - 1), pSingleMsg);
+    uint uIndex = m_listSingleTakeInMsg.count();
+    for(int i = 0; i < m_listSingleTakeInMsg.count(); i++)
+    {
+        SingleMsg* pTmpSingleMsg = m_listSingleTakeInMsg.at(i);
+        if(pSingleMsg->getNotifyAbsuluteTime() < pTmpSingleMsg->getNotifyAbsuluteTime())
+        {
+            uIndex = i;
+            break;
+        }
+    }
+    m_listSingleTakeInMsg.insert(uIndex, pSingleMsg);
+    m_pScrollAreaTakeInVBoxLayout->insertWidget(uIndex, pSingleMsg);
 
+    int nCount = m_listSingleTakeInMsg.count();
+    QString strCount = QString::number(nCount);
+    int nBit = 1; //收纳数的位数
+    while(nCount >= 10)
+    {
+        nCount = nCount / 10;
+        nBit++;
+    }
+
+    m_pTakeInCoutLabel->setGeometry(361, 21, (6 + 6 * nBit), 12);
+    m_pTakeInCoutLabel->setText(strCount);
+    if(false == m_pTakeInCoutLabel->isVisible())
+    {
+        m_pTakeInCoutLabel->setVisible(true);
+    }
 
     return;
 }
 
 void NotificationPlugin::onClearMsg(SingleMsg* pSingleMsg)
 {
-    if(false == m_bShowTakeIn)  //当展示通知列表时
+    if(true == m_bShowTakeIn)  //当展示通知列表时
     {
-        int nIndex = m_listSingleMsg.indexOf(pSingleMsg);
-        if(-1 == nIndex)
-        {
-            qDebug()<<"NotificationPlugin::onClearMsg 在通知链表中未找到pSingleMsg指针";
-            return;
-        }
-
-        m_listSingleMsg.removeAt(nIndex);
-        m_pScrollAreaNotifyVBoxLayout->removeWidget(pSingleMsg);
-
-
-        if(0 == m_listSingleMsg.count() && 1 == m_pScrollAreaNotifyVBoxLayout->count())
-        {
-            m_pMessageCenterLabel = new QLabel("没有新通知");
-            m_pMessageCenterLabel->setStyleSheet("QLabel{padding:10px 0px 0px 11px;}");
-            m_pScrollAreaNotifyVBoxLayout->insertWidget((m_pScrollAreaNotifyVBoxLayout->count() - 1), m_pMessageCenterLabel);
-        }
+        qDebug()<<"NotificationPlugin::onClearMsg 在收纳盒时，是不应该点击到删除按钮的";
+        return;
     }
-    else    //当展示收纳列表时
+
+    int nIndex = m_listSingleMsg.indexOf(pSingleMsg);
+    if(-1 == nIndex)
     {
-        int nIndex = m_listSingleTakeInMsg.indexOf(pSingleMsg);
-        if(-1 == nIndex)
-        {
-            qDebug()<<"NotificationPlugin::onClearMsg 在收纳链表中未找到pSingleMsg指针";
-            return;
-        }
-
-        m_listSingleTakeInMsg.removeAt(nIndex);
-        m_pScrollAreaTakeInVBoxLayout->removeWidget(pSingleMsg);
+        qDebug()<<"NotificationPlugin::onClearMsg 在通知链表中未找到pSingleMsg指针";
+        return;
     }
+
+    m_listSingleMsg.removeAt(nIndex);
+    m_pScrollAreaNotifyVBoxLayout->removeWidget(pSingleMsg);
     pSingleMsg->deleteLater();
+
+    if(0 == m_listSingleMsg.count() && 1 == m_pScrollAreaNotifyVBoxLayout->count())
+    {
+        m_pMessageCenterLabel = new QLabel("没有新通知");
+        m_pMessageCenterLabel->setStyleSheet("QLabel{padding:10px 0px 0px 11px;}");
+        m_pScrollAreaNotifyVBoxLayout->insertWidget((m_pScrollAreaNotifyVBoxLayout->count() - 1), m_pMessageCenterLabel);
+    }
 
     return;
 }
@@ -277,8 +294,17 @@ void NotificationPlugin::clearAllMessage()
             pSingleMsg->deleteLater();
             m_listSingleTakeInMsg.removeAt(0);
         }
+        m_pTakeInCoutLabel->setVisible(false);
     }
 
+    return;
+}
+
+void NotificationPlugin::callControlPanel()
+{
+    QProcess p(0);
+    p.startDetached("ukui-control-center");
+    p.waitForStarted();
     return;
 }
 
@@ -289,12 +315,34 @@ void NotificationPlugin::showTakeInMessage()
         m_bShowTakeIn = true;
         m_pQScrollAreaNotify->setVisible(false);
         m_pQScrollAreaTakeIn->setVisible(true);
+        m_pNotificationLabel->setText("不重要的通知");
+
+        m_pSvgRender->load(QString(":/images/exitbox.svg"));
+        m_pPixmap->fill(Qt::transparent);
+        QPainter painter(m_pPixmap);
+        m_pSvgRender->render(&painter);
+        m_pTakeInBoxToolButton->setIcon(QIcon(*m_pPixmap));
+        m_pTakeInBoxToolButton->setEnterFlags(m_bShowTakeIn);
+
+        m_pTakeInCoutLabel->setVisible(false);
     }
     else
     {
         m_bShowTakeIn = false;
         m_pQScrollAreaNotify->setVisible(true);
         m_pQScrollAreaTakeIn->setVisible(false);
+        m_pNotificationLabel->setText("重要的通知");
 
+        m_pSvgRender->load(QString(":/images/box.svg"));
+        m_pPixmap->fill(Qt::transparent);
+        QPainter painter(m_pPixmap);
+        m_pSvgRender->render(&painter);
+        m_pTakeInBoxToolButton->setIcon(QIcon(*m_pPixmap));
+        m_pTakeInBoxToolButton->setEnterFlags(m_bShowTakeIn);
+
+        if(m_listSingleTakeInMsg.count() > 0)
+        {
+            m_pTakeInCoutLabel->setVisible(true);
+        }
     }
 }
